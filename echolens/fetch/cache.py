@@ -17,10 +17,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import random
+import time
 from typing import Any, Dict, List, Set
 
 from .models import Comment, VideoMeta
+
+_logger = logging.getLogger(__name__)
 
 
 def comment_paths(base_dir: str, bvid: str) -> Dict[str, str]:
@@ -120,10 +125,40 @@ def read_state(state_path: str) -> Dict[str, Any]:
 
 
 def write_state(state_path: str, state: Dict[str, Any]) -> None:
+    """原子写 state.json，对 Windows 文件占用（WinError 32）做有限重试 + 降级。
+
+    策略：
+    1. 先写 `<state>.tmp` 再 `os.replace` 落盘；
+    2. 若 `os.replace` 因被杀软 / 文件监视器占用而抛 OSError（PermissionError
+       [WinError 32]），重试最多 3 次，间隔 0.2~0.5s；
+    3. 仍失败则降级为直接 `open(state_path, "w")` 覆写；
+    4. 再失败仅记 warning 不抛异常——断点写失败不该杀死一次跑了很久的抓取。
+    """
+    payload = json.dumps(state, ensure_ascii=False, indent=2)
     tmp = state_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, state_path)
+    for attempt in range(3):
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp, state_path)
+            return
+        except OSError:
+            if attempt < 2:
+                time.sleep(random.uniform(0.2, 0.5))
+                continue
+    # 重试耗尽：降级为直接覆写
+    try:
+        with open(state_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+        return
+    except OSError as exc:
+        _logger.warning("写断点状态失败，已跳过（下次可续抓）：%s", exc)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def rm_state(state_path: str) -> None:
@@ -131,6 +166,19 @@ def rm_state(state_path: str) -> None:
         os.remove(state_path)
     except OSError:
         pass
+
+
+def clear_video_files(base_dir: str, bvid: str) -> None:
+    """删除某视频已落盘的 jsonl / meta / state 三文件（--fresh 用）。
+
+    任一文件不存在或删除失败均静默忽略，不抛异常。
+    """
+    for p in comment_paths(base_dir, bvid).values():
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
 
 
 __all__ = [
@@ -144,4 +192,5 @@ __all__ = [
     "read_state",
     "write_state",
     "rm_state",
+    "clear_video_files",
 ]

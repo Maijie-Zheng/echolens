@@ -86,7 +86,7 @@ data/comments/<bvid>.state.json 断点续抓状态（完成后删除）
 
 ### 续抓语义
 
-- 程序启动先读 `state.json`（除非 `--fresh`）；`--fresh` 忽略已有断点从头抓。
+- 程序启动先读 `state.json`（除非 `--fresh`）；`--fresh` 忽略已有断点从头抓，**并清空该视频已落盘的 jsonl 评论与 meta 统计**（删除旧 jsonl / meta / state 三文件），保证重新抓取后落盘内容恰为本次结果，不残留旧数据、不产生重复 rpid。
 - 每完成一页根评论 / 每条根评论的楼中楼，都会更新并写回 `state.json`。
 - 中断（Ctrl+C / 接口错误）时保存 `state.json`，下次从断点继续，**不会重复抓取**（配合 jsonl 中已存 rpid 去重）。
 - 全部完成后删除 `state.json`。

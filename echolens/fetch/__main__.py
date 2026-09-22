@@ -28,6 +28,7 @@ from typing import List, Optional, Set
 from .bilibili import BilibiliClient, BilibiliError
 from .cache import (
     append_comment,
+    clear_video_files,
     comment_paths,
     default_state,
     ensure_dir,
@@ -111,6 +112,11 @@ def run(
         logger.error("获取视频元信息失败：%s", exc)
         return 1
 
+    if fresh:
+        # --fresh：抓取开始前清空该视频已落盘的 jsonl / meta / state，
+        # 保证本次落盘内容恰为本次抓取结果（避免重复 rpid / 残留旧数据）
+        clear_video_files(out, bvid)
+
     state = default_state() if fresh else read_state(paths["state"])
     seen: Set[int] = set() if fresh else load_seen_rpids(paths["jsonl"])
 
@@ -175,6 +181,10 @@ def run(
         return 130
     except BilibiliError as exc:
         logger.error("抓取中断：%s（已保存断点，可续抓）", exc)
+        write_state(paths["state"], state)
+        return 1
+    except OSError as exc:
+        logger.error("IO 错误：%s（已保存断点，可续抓）", exc)
         write_state(paths["state"], state)
         return 1
 
