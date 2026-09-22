@@ -2,8 +2,8 @@
 
 只描述「落盘需要」的字段，严格遵守 PRD §8.1 与 WORKFLOW 铁律 3 的匿名化要求：
 - 评论落盘**只含**下方 Comment 列出的 8 个字段；
-- **严禁**任何形式的评论者身份信息（mid / uname / avatar / sign / level /
-  member 对象等），`Comment.from_reply` 构建时主动把 `member` 等字段丢弃；
+- **严禁**任何形式的评论者身份信息（用户 ID、昵称、头像、签名、等级等），
+  `Comment.from_reply` 构建时主动丢弃身份相关字段；
 - rpid 是评论 ID（去重与断点续抓需要），不是用户身份，允许存储。
 
 见 docs/DATA_FORMAT.md 了解落盘格式。
@@ -83,7 +83,7 @@ class Comment:
     def from_reply(cls, reply: Dict[str, Any], is_sub: bool) -> "Comment":
         """从 B 站单条 reply JSON 构造 Comment。
 
-        只抽取白名单字段；`member`、各类身份/等级/头像信息一律不读取、不落盘。
+        只抽取白名单字段；身份、等级、头像等信息一律不读取、不落盘。
         """
         content = reply.get("content") or {}
         return cls(
