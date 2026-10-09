@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 
@@ -283,5 +284,66 @@ def test_discussion_criteria_encodes_boundaries():
     assert set(crit.keys()) == {"true", "false"}
     # 边界 1：就内容提问只算 question → question 落 false 一侧
     assert "question" in crit["false"]
-    # 边界 2：「而不是仅在表态」——保住「仅」字
-    assert "仅" in spec["instructions"] or "仅" in crit["true"] + crit["false"]
+    # 边界 2：「批评 + 讨论双标」——true 侧须同时编码
+    #   (a) 批评/褒贬类词（讨论中夹带态度也算讨论）
+    #   (b) 讨论/内容类词
+    # 删掉 crit["true"] 里「即使同时带有褒贬态度…既批评也在讨论内容」这句边界描述后，
+    # (a) 会失配从而测试失败；因此本断言不是恒真。
+    assert any(w in crit["true"] for w in ("批评", "褒贬", "吐槽")), \
+        f"criteria.true 未编码「批评/褒贬」边界：{crit['true']!r}"
+    assert any(w in crit["true"] for w in ("讨论", "内容", "解读")), \
+        f"criteria.true 未编码「讨论/内容」边界：{crit['true']!r}"
+
+
+def test_load_questions_rejects_missing_key(tmp_path):
+    """questions.json 缺少 LABEL_KEYS 中的键 → 明确报错（不静默）。"""
+    import os
+    qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
+    with open(qs_path, encoding="utf-8") as f:
+        base = json.load(f)
+    missing = {k: v for k, v in base.items() if k != "discussion"}
+    p = tmp_path / "questions_missing.json"
+    p.write_text(json.dumps(missing, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="discussion"):
+        label_mod.load_questions(str(p))
+
+
+def test_load_questions_rejects_extra_key(tmp_path):
+    """questions.json 多出 LABEL_KEYS 之外的键 → 明确报错（不静默丢弃）。"""
+    import os
+    qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
+    with open(qs_path, encoding="utf-8") as f:
+        base = json.load(f)
+    base["bogus_dim"] = {"type": "noul", "instructions": "x"}
+    p = tmp_path / "questions_extra.json"
+    p.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="bogus_dim"):
+        label_mod.load_questions(str(p))
+
+
+def test_load_labeled_rpids_warns_on_missing_dim(tmp_path, caplog):
+    """旧标注缺当前维度时打 WARNING，但续跑语义不变（仍按 rpid 跳过）。"""
+    p = tmp_path / "labels" / "BVX.jsonl"
+    old_keys = [k for k in LABEL_KEYS if k != "discussion"]  # 模拟 v0.1 的 9 键
+    _write_comments(p, [
+        {"rpid": 1, "model": "m", "labels": {k: 0.1 for k in old_keys}},
+        {"rpid": 2, "model": "m", "labels": {k: 0.1 for k in old_keys}},
+    ])
+    with caplog.at_level(logging.WARNING, logger="echolens.judge.label"):
+        seen = load_labeled_rpids(str(p))
+    assert seen == {1, 2}                       # 续跑语义不变
+    assert "discussion" in caplog.text          # 点名缺失维度
+    assert "2" in caplog.text                   # 报出条数
+    assert "fresh" in caplog.text               # 给出 --fresh 建议
+
+
+def test_load_labeled_rpids_no_warning_when_complete(tmp_path, caplog):
+    """键齐全的旧标注不应产生 WARNING。"""
+    p = tmp_path / "labels" / "BVX.jsonl"
+    _write_comments(p, [
+        {"rpid": 1, "model": "m", "labels": {k: 0.1 for k in LABEL_KEYS}},
+    ])
+    with caplog.at_level(logging.WARNING, logger="echolens.judge.label"):
+        seen = load_labeled_rpids(str(p))
+    assert seen == {1}
+    assert caplog.text == ""

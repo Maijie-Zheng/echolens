@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EchoLens 人工标注（M1 基线 200 条）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #f3f4f6; color: #1f2937; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { font-size: 18px; }
+  .bar-outer { flex: 1 1 160px; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden; min-width: 120px; }
+  .bar-inner { height: 100%; background: #2563eb; width: 0%; transition: width .2s; }
+  .counts { font-size: 13px; color: #4b5563; white-space: nowrap; }
+  .btn { padding: 6px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #f9fafb; }
+  .btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .btn.primary:hover { background: #1d4ed8; }
+  .card { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 14px; }
+  .meta { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; font-size: 13px; color: #6b7280; }
+  .seq { font-weight: 700; color: #111827; font-size: 15px; }
+  .tag { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #e5e7eb; }
+  .tag.sub { background: #fef3c7; color: #92400e; }
+  .tag.like { background: #fee2e2; color: #b91c1c; }
+  .msg { font-size: 17px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  .dims { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .dim { text-align: left; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; cursor: pointer; }
+  .dim .k { font-weight: 700; font-size: 13px; }
+  .dim .n { color: #374151; font-size: 13px; }
+  .dim .d { display: block; color: #9ca3af; font-size: 11px; margin-top: 2px; line-height: 1.4; }
+  .dim .hot { float: right; color: #9ca3af; font-size: 11px; }
+  .dim.on { background: #dbeafe; border-color: #2563eb; }
+  .dim.on .k, .dim.on .n { color: #1d4ed8; }
+  .dim:last-child { grid-column: 1 / -1; }
+  .nav { display: flex; gap: 10px; justify-content: space-between; align-items: center; }
+  .hint { font-size: 12px; color: #9ca3af; margin-top: 14px; line-height: 1.8; }
+  .empty-note { font-size: 12px; color: #6b7280; margin-top: 8px; }
+  @media (max-width: 560px) { .dims { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>EchoLens 人工标注</h1>
+    <div class="bar-outer"><div class="bar-inner" id="bar"></div></div>
+    <span class="counts" id="counts"></span>
+    <button class="btn" id="btn-unlabeled">检查未标</button>
+    <button class="btn primary" id="btn-export">导出 JSON</button>
+  </header>
+
+  <div class="card">
+    <div class="meta">
+      <span class="seq" id="seq"></span>
+      <span class="tag" id="bvid"></span>
+      <span class="tag sub" id="sub-tag" style="display:none">楼中楼</span>
+      <span class="tag like" id="like"></span>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="dims" id="dims"></div>
+  <div class="empty-note">可勾选多个维度；<b>全部不勾 = 无有效信息</b>（按 → 或「下一条」即记录本条）。</div>
+
+  <div class="nav" style="margin-top:12px">
+    <button class="btn" id="btn-prev">← 上一条</button>
+    <span class="counts" id="save-state">已自动保存</span>
+    <button class="btn" id="btn-next">下一条 →</button>
+  </div>
+
+  <div class="hint">
+    快捷键：数字键 1–9 与 0 切换对应维度（0 = 讨论内容）；← 上一条；→ 下一条。<br>
+    标注自动保存到浏览器 localStorage，刷新 / 关闭重开不丢失。标完点「导出 JSON」下载 human_labels.json。
+  </div>
+  <noscript style="color:#b91c1c; margin-top:12px; display:block;">
+    ⚠️ 此工具需要 JavaScript。请双击本地文件用 Edge/Chrome 打开（不要用 WorkBuddy 内嵌预览）。
+  </noscript>
+</div>
+
+<script>
+"use strict";
+var DATA = __DATA_JSON__;
+var DIMS = __DIMS_JSON__;
+var LS_LABELS = "echolens_human_labels_v1";
+var LS_IDX = "echolens_human_labels_idx_v1";
+
+var labels = {};
+try { labels = JSON.parse(localStorage.getItem(LS_LABELS) || "{}") || {}; } catch (e) { labels = {}; }
+var idx = parseInt(localStorage.getItem(LS_IDX) || "0", 10);
+if (isNaN(idx) || idx < 0 || idx >= DATA.length) idx = 0;
+
+function save() {
+  localStorage.setItem(LS_LABELS, JSON.stringify(labels));
+  localStorage.setItem(LS_IDX, String(idx));
+  var el = document.getElementById("save-state");
+  el.textContent = "已自动保存 " + new Date().toLocaleTimeString();
+}
+
+function current() { return DATA[idx]; }
+
+function curSelection() {
+  return labels[String(current().rpid)] || [];
+}
+
+/* 把当前条目标记为「已标」（即使全部不勾 = 无有效信息），再跳转 */
+function markAndGo(next) {
+  labels[String(current().rpid)] = curSelection();
+  if (next) idx = Math.min(DATA.length - 1, idx + 1);
+  else idx = Math.max(0, idx - 1);
+  save();
+  render();
+}
+
+function toggleDim(key) {
+  var rpid = String(current().rpid);
+  var sel = (labels[rpid] || []).slice();
+  var i = sel.indexOf(key);
+  if (i >= 0) sel.splice(i, 1); else sel.push(key);
+  labels[rpid] = sel;
+  save();
+  render();
+}
+
+function labeledCount() {
+  var n = 0;
+  for (var i = 0; i < DATA.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(labels, String(DATA[i].rpid))) n++;
+  }
+  return n;
+}
+
+function render() {
+  var c = current();
+  document.getElementById("seq").textContent = (idx + 1) + " / " + DATA.length;
+  document.getElementById("bvid").textContent = c.bvid;
+  document.getElementById("sub-tag").style.display = c.is_sub ? "" : "none";
+  document.getElementById("like").textContent = "赞 " + c.like;
+  document.getElementById("msg").textContent = c.message;
+
+  var sel = curSelection();
+  var box = document.getElementById("dims");
+  box.innerHTML = "";
+  DIMS.forEach(function (d, i) {
+    var b = document.createElement("button");
+    b.className = "dim" + (sel.indexOf(d.key) >= 0 ? " on" : "");
+    var hotkey = (i === 9) ? "0" : String(i + 1);  // 数字键 1–9 对应前 9 项，0 对应第 10 项
+    b.innerHTML = '<span class="hot">' + hotkey + '</span><span class="k">' + d.key +
+      '</span> <span class="n">' + d.name + '</span><span class="d">' + d.def + '</span>';
+    b.onclick = function () { toggleDim(d.key); };
+    box.appendChild(b);
+  });
+
+  var n = labeledCount();
+  document.getElementById("bar").style.width = (n / DATA.length * 100) + "%";
+  document.getElementById("counts").textContent = "已标 " + n + " / 未标 " + (DATA.length - n);
+}
+
+function exportJSON() {
+  var out = {};
+  var order = DIMS.map(function (d) { return d.key; });
+  for (var i = 0; i < DATA.length; i++) {
+    var rpid = String(DATA[i].rpid);
+    if (Object.prototype.hasOwnProperty.call(labels, rpid)) {
+      out[rpid] = order.filter(function (k) { return labels[rpid].indexOf(k) >= 0; });
+    }
+  }
+  var blob = new Blob([JSON.stringify(out, null, 2)], {type: "application/json"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "human_labels.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+  alert("已导出 human_labels.json（含 " + Object.keys(out).length + " 条）");
+}
+
+function gotoFirstUnlabeled() {
+  for (var i = 0; i < DATA.length; i++) {
+    if (!Object.prototype.hasOwnProperty.call(labels, String(DATA[i].rpid))) {
+      labels[String(current().rpid)] = curSelection();
+      idx = i;
+      save();
+      render();
+      return;
+    }
+  }
+  alert("全部 200 条都已标注。");
+}
+
+document.getElementById("btn-prev").onclick = function () { markAndGo(false); };
+document.getElementById("btn-next").onclick = function () { markAndGo(true); };
+document.getElementById("btn-export").onclick = exportJSON;
+document.getElementById("btn-unlabeled").onclick = gotoFirstUnlabeled;
+
+document.addEventListener("keydown", function (e) {
+  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+  if (e.key === "ArrowRight") { e.preventDefault(); markAndGo(true); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); markAndGo(false); }
+  else if (e.key >= "0" && e.key <= "9") {
+    var i = (e.key === "0") ? 9 : parseInt(e.key, 10) - 1;  // 1–9 → 前 9 项，0 → 第 10 项
+    if (i < DIMS.length) toggleDim(DIMS[i].key);
+  }
+});
+
+render();
+</script>
+</body>
+</html>

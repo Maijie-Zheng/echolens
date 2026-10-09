@@ -56,16 +56,45 @@ def label_paths(base_dir: str, bvid: str) -> Dict[str, str]:
 
 
 def load_questions(path: str = QUESTIONS_PATH) -> Dict[str, Any]:
-    """加载 10 个分类问题配置（key -> {type, instructions}）。"""
+    """加载 10 个分类问题配置（key -> {type, instructions}）。
+
+    强校验：questions.json 的键集合必须与 LABEL_KEYS 完全相等，否则显式抛
+    ValueError。理由：不做校验时两侧不一致是**静默**的——
+    questions.json 多一个键会被 {k: ... for k in LABEL_KEYS} 静默丢弃；
+    LABEL_KEYS 多一个键则该维度恒为 0.0，导致一致率/占比全错。
+    校验放在本函数（而非 run_label 启动处），以保证任何调用方都过同一道关。
+    """
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        questions = json.load(f)
+    expected = set(LABEL_KEYS)
+    actual = set(questions)
+    if actual != expected:
+        missing = sorted(expected - actual)  # 在 LABEL_KEYS 但 questions.json 缺
+        extra = sorted(actual - expected)    # 在 questions.json 但 LABEL_KEYS 缺
+        problems = []
+        if missing:
+            problems.append(f"questions.json 缺少 {missing}")
+        if extra:
+            problems.append(f"questions.json 多出 {extra}")
+        raise ValueError(
+            "questions.json 的维度键与 LABEL_KEYS 不一致（"
+            + "；".join(problems)
+            + "），请同步 echolens/judge/label.py 的 LABEL_KEYS 与 questions.json"
+        )
+    return questions
 
 
 def load_labeled_rpids(labels_path: str) -> Set[int]:
-    """读已有 labels，返回已打标 rpid 集合（断点续跑去重）。"""
+    """读已有 labels，返回已打标 rpid 集合（断点续跑去重）。
+
+    若发现已落盘记录缺少当前 LABEL_KEYS 中的维度（例如用 v0.1 的 9 键旧结果
+    续跑 v0.2），打一条 WARNING 提示，但不改变续跑语义（仍按 rpid 跳过）。
+    """
     seen: Set[int] = set()
     if not os.path.exists(labels_path):
         return seen
+    missing_keys: Set[str] = set()
+    stale_records = 0
     with open(labels_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -78,6 +107,17 @@ def load_labeled_rpids(labels_path: str) -> Set[int]:
             rpid = obj.get("rpid")
             if isinstance(rpid, int):
                 seen.add(rpid)
+                labels = obj.get("labels")
+                if isinstance(labels, dict):
+                    lacking = set(LABEL_KEYS) - set(labels)
+                    if lacking:
+                        stale_records += 1
+                        missing_keys |= lacking
+    if missing_keys:
+        logger.warning(
+            "检测到 %d 条旧标注缺少维度 [%s]，建议加 --fresh 重跑",
+            stale_records, ", ".join(sorted(missing_keys)),
+        )
     return seen
 
 
@@ -147,7 +187,7 @@ def _judge_one(
     limiter: RateLimiter,
     comment: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """对单条评论做一次调用（9 Noul 并行），返回 labels 记录。"""
+    """对单条评论做一次调用（10 Noul 并行），返回 labels 记录。"""
     state = sanitize_comment(str(comment.get("message") or ""))
     limiter.acquire()
     result = provider.judge(state, questions)
@@ -172,7 +212,7 @@ def run_label(
     流程：
         1. 读已有 labels 的 rpid 集合（断点续跑）；
         2. 从 comments 筛出待打标评论（可选 --limit 截断）；
-        3. 并发 worker + 全局限速，每条一次调用（9 Noul）；
+        3. 并发 worker + 全局限速，每条一次调用（10 Noul）；
         4. 结果逐条追加落盘；汇总耗时 / token / 估算成本。
     异常：任一 worker 抛错即取消剩余任务并向上抛（已落盘结果保留，可续跑）。
     """

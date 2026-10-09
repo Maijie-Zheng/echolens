@@ -23,11 +23,29 @@ M1 要用人工标注的 200 条评论做「金标准」，衡量 Jev 打标的�
 | 文件 | 内容 |
 |---|---|
 | `scripts\make_label_sample.py` | 分层抽样脚本：从 3 个视频共抽 **200 条**（按比例约 20/70/110；再按点赞分档 0 / 1-9 / 10-99 / 100+ 分层；根评论与子评论按源数据比例保留）。随机种子固定（--seed，默认 42）保证可复现。输出 `data\labeling\sample.jsonl`，每行 `{"rpid","bvid","message","like","ctime","is_sub"}`，并打印分层分布表 |
-| `data\labeling\label.html` | **单文件、零依赖、双击即用**的标注界面（sample.jsonl 内容直接内嵌进 HTML，不起本地服务）。功能：一次显示一条评论（显示序号 x/200、正文、点赞数、是否楼中楼）；10 个维度以开关按钮呈现（key + 中文名 + 一行定义，见下）；**多标签**（一条评论可同时勾选多个维度，也可全不勾=「无有效信息」）；键盘快捷键：数字键 1-9 与 0 切换对应维度（0 = 第 10 项 discussion）、→ 下一条、← 上一条；进度条 + 已标/未标计数；自动保存到 localStorage（刷新不丢）；「导出 JSON」按钮下载 `human_labels.json`（结构：`{"<rpid>": ["praise","meme",...], ...}`）；「检查未标」按钮跳到第一个未标条目 |
+| `tools\labeling\label_template.html` | 标注界面**模板**（入库），单文件、零依赖、双击即用。CSS/JS/键盘映射/noscript 等逐字沿用；两处内嵌数组以占位符 `__DATA_JSON__`（评论数据）与 `__DIMS_JSON__`（维度表）留空，由构建脚本填充。功能：一次显示一条评论（序号 x/200、正文、点赞数、是否楼中楼）；10 个维度以开关按钮呈现（key + 中文名 + 一行定义）；**多标签**（可多选，也可全不勾=「无有效信息」）；键盘快捷键：数字键 1-9 与 0 切换对应维度（0 = 第 10 项 discussion）、→ 下一条、← 上一条；进度条 + 已标/未标计数；自动保存 localStorage（刷新不丢）；「导出 JSON」下载 `human_labels.json`（`{"<rpid>": ["praise","meme",...], ...}`）；「检查未标」跳到第一个未标条目 |
+| `tools\labeling\dims_ui.json` | 10 个维度的 **UI 短名与定义**（`key -> {"name","def"}`，入库）；键集合须与 `echolens.judge.label.LABEL_KEYS` 完全一致 |
+| `tools\build_label.py` | **构建脚本**（入库）：读 `data\labeling\sample.jsonl` + 模板 + 维度表，按 `LABEL_KEYS` 顺序重排维度并生成 `data\labeling\label.html`；含键集合强校验（dims_ui / questions.json 与 `LABEL_KEYS` 三方一致，不一致即非零退出并打印中文错误）。幂等；无样本时给出清晰提示并非零退出 |
+| `data\labeling\label.html` | **本地生成物，不入库**（内嵌 200 条真实评论原文，含 `@昵称` 提及；公开仓库 + 匿名化要求 PRD §8.1，避免原文外泄）。由构建脚本在本地生成，与原实现逐字节一致 |
 | `scripts\agreement.py` | 一致率统计：读 human_labels.json + `data\labels\sample_labels.jsonl`（Jev 对同样本的打标，由 M1-T1 的管线后续产出，文件可能还不存在——脚本要对缺失文件报清晰错误）。Jev 的 0~1 概率按阈值 0.5 转布尔。输出：每个维度的一致率、宏平均、按 Cohen's kappa（可选）、分歧最大的 20 条列出（rpid + 正文截断 80 字 + 人工标 vs Jev 标），写 `data\labeling\agreement_report.md` |
 
 10 个维度（key / 中文名 / 一行定义，与 PRD §6.1 v0.2 一致）：
 praise 夸、 criticism 批、 suggestion 建议、 question 提问、 meme 玩梗、 venting 情绪宣泄、 spam 水军/广告、 off_topic 跑题、 about_creator 针对 UP 主本人、 discussion 讨论内容
+
+## 构建命令
+
+```bash
+# 1) 先抽样（生成 data/labeling/sample.jsonl）
+python scripts/make_label_sample.py
+
+# 2) 构建标注界面（生成 data/labeling/label.html，本地文件，不入库）
+python tools/build_label.py
+# 可选：
+#   python tools/build_label.py --sample data/labeling/sample.jsonl --out data/labeling/label.html
+```
+
+构建脚本以 `echolens.judge.label.LABEL_KEYS` 为维度顺序唯一来源，并强校验
+`tools/labeling/dims_ui.json` 与 `echolens/judge/questions.json` 的键集合均与之完全一致。
 
 ## 验收标准（reviewer 逐条核对）
 
