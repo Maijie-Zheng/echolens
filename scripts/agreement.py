@@ -37,6 +37,7 @@ DIMS = [
     ("spam", "水军/广告"),
     ("off_topic", "跑题"),
     ("about_creator", "针对 UP 主本人"),
+    ("discussion", "讨论内容"),
 ]
 DIM_KEYS = [k for k, _ in DIMS]
 THRESHOLD = 0.5

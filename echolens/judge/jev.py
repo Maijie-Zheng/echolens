@@ -3,7 +3,7 @@
 API 事实（2026-10-09 从官方文档提取，见 docs/tasks/M1-T1-judge-layer.md）：
 - `POST https://api.typesafe.ai/v1/systemone`，`Authorization: Bearer $TYPESAFE_API_KEY`；
 - 请求 `{"state": ..., "model": "jev-1.13.0", "questions": {...}}`；同一次调用可混合
-  多个问题并行求值，加问题几乎不增加耗时——所以每条评论一次调用带全部 9 个 Noul；
+  多个问题并行求值，加问题几乎不增加耗时——所以每条评论一次调用带全部 10 个 Noul；
 - 响应 `{"model": ..., "answers": {key: {"type": "noul", "noul": 0~1}}, "usage": {...}}`；
 - Noul 答案是「是」的概率（0~1），无 confidence 字段；
 - 错误码：401 key 无效（不重试）、422 请求体校验失败（不重试）、

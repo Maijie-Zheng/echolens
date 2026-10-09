@@ -85,7 +85,7 @@ dev 实现 ──→ reviewer 审查 ──→ tester 测试
 ```
 echolens/
 ├── fetch/      数据层：B站公开接口、JSONL 缓存
-├── judge/      判断层：Provider 抽象、Jev 客户端、防注入过滤、9 个分类问题
+├── judge/      判断层：Provider 抽象、Jev 客户端、防注入过滤、10 个分类问题
 ├── analyze/    分析层：聚合统计、规则建议引擎、主题归因
 └── report/     呈现层：HTML 报告、竖版 PNG、CLI
 ```

@@ -17,6 +17,7 @@ agr = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(agr)
 
 DIM_KEYS = agr.DIM_KEYS
+DIMS = agr.DIMS
 
 
 def _write_json(path, obj):
@@ -76,9 +77,9 @@ def test_end_to_end_report(synth, monkeypatch, capsys):
     assert "1 条只有人工标注" in report
     # praise：rpid1 一致，rpid2 不一致，rpid3 一致 → 2/3
     assert "| `praise` | 夸 | 66.7%" in report
-    # meme：rpid3 不一致，其余一致 → 2/3；其余 7 维全一致 100%
-    # 宏平均 = (7*1 + 2/3 + 2/3) / 9 ≈ 92.6%
-    assert "宏平均一致率：92.6%" in report
+    # meme：rpid3 不一致，其余一致 → 2/3；其余 8 维全一致 100%
+    # 宏平均 = (8*1 + 2/3 + 2/3) / 10 ≈ 93.3%
+    assert "宏平均一致率：93.3%" in report
     # 分歧清单含 rpid 2 和 3
     assert "rpid `2`" in report and "rpid `3`" in report
 
@@ -149,3 +150,14 @@ def test_truncate():
     out = agr.truncate(long, 80)
     assert len(out) == 80 and out.endswith("…")
     assert agr.truncate("a\n  b\tc", 80) == "a b c"
+
+
+# ---------- 维度配置一致性（v0.2：agreement.DIMS 与 label.LABEL_KEYS 必须一致） ----------
+
+def test_dims_match_label_keys():
+    """agreement.py 的 DIMS 顺序/内容必须与 judge.label.LABEL_KEYS 完全一致。"""
+    from echolens.judge.label import LABEL_KEYS
+    assert list(DIM_KEYS) == list(LABEL_KEYS)
+    assert "discussion" in DIM_KEYS
+    cn = dict(DIMS)
+    assert cn["discussion"] == "讨论内容"

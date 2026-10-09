@@ -49,7 +49,7 @@ logger = logging.getLogger("echolens.judge")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m echolens.judge",
-        description="对 B 站评论做 9 维度打标（每条一次 Jev 调用，断点续跑）",
+        description="对 B 站评论做 10 维度打标（每条一次 Jev 调用，断点续跑）",
     )
     p.add_argument("bvid", help="BV 号（需先用 python -m echolens.fetch 抓过评论）")
     p.add_argument("--out", default="data", help="数据根目录（默认 data）")

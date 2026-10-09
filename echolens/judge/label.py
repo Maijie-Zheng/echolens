@@ -1,11 +1,11 @@
 """打标管线（M1-T1 判断层）。
 
 数据流（层间只用 JSONL 解耦，PRD 决策 D6）：
-    data/comments/<bvid>.jsonl  -->  [每条一次 Jev 调用，9 个 Noul 并行]
+    data/comments/<bvid>.jsonl  -->  [每条一次 Jev 调用，10 个 Noul 并行]
                                 -->  data/labels/<bvid>.jsonl
 
 labels JSONL 每行：
-    {"rpid": int, "model": "jev-1.13.0", "labels": {9 个 key: 0.0~1.0}}
+    {"rpid": int, "model": "jev-1.13.0", "labels": {10 个 key: 0.0~1.0}}
 
 特性：
 - 并发 worker（默认 16，硬上限 20）+ 全局限速（默认 1000 req/min，
@@ -40,10 +40,10 @@ MAX_CONCURRENCY = 20          # 硬上限
 DEFAULT_RATE_PER_MIN = 1000   # 全局限速（PRD 预算 1200，留余量）
 EST_COST_PER_CALL_USD = 0.000023  # PRD §6.4：1000 条约 $0.023
 
-# labels 必须恰好包含这 9 个 key（与 questions.json 对应）
+# labels 必须恰好包含这 10 个 key（顺序与 questions.json 一致，PRD §6.1 v0.2）
 LABEL_KEYS = (
     "praise", "criticism", "suggestion", "question", "meme",
-    "venting", "spam", "off_topic", "about_creator",
+    "venting", "spam", "off_topic", "about_creator", "discussion",
 )
 
 
@@ -56,7 +56,7 @@ def label_paths(base_dir: str, bvid: str) -> Dict[str, str]:
 
 
 def load_questions(path: str = QUESTIONS_PATH) -> Dict[str, Any]:
-    """加载 9 个分类问题配置（key -> {type, instructions}）。"""
+    """加载 10 个分类问题配置（key -> {type, instructions}）。"""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 

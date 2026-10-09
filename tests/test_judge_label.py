@@ -5,7 +5,8 @@
 - 并发上限校验
 - 限速器节奏
 - cancel_futures 行为（编排方代改 #2 验证）
-- labels 落盘格式（9 维齐全、值域 [0,1]、rpid 无重复）
+- labels 落盘格式（10 维齐全、值域 [0,1]、rpid 无重复）
+- LABEL_KEYS 与 questions.json 的 key 集合/顺序一致（v0.2）
 """
 
 from __future__ import annotations
@@ -140,7 +141,7 @@ def test_labels_on_disk_format(tmp_path):
         assert set(rec.keys()) == {"rpid", "model", "labels"}
         assert isinstance(rec["rpid"], int)
         assert rec["model"] == "jev-1.13.0"
-        assert set(rec["labels"].keys()) == set(LABEL_KEYS)  # 9 维齐全
+        assert set(rec["labels"].keys()) == set(LABEL_KEYS)  # 10 维齐全
         for v in rec["labels"].values():
             assert isinstance(v, float)
             assert 0.0 <= v <= 1.0  # 值域
@@ -149,7 +150,7 @@ def test_labels_on_disk_format(tmp_path):
 
 
 def test_missing_answer_dim_defaults_zero(tmp_path):
-    """provider 缺维度时按 0.0 填，保证 9 维齐全。"""
+    """provider 缺维度时按 0.0 填，保证 10 维齐全。"""
     _write_comments(tmp_path / "comments" / "BVX.jsonl", _comments(1))
     provider = FakeProvider(answers={"praise": 0.9})  # 只给一个维度
     run_label("BVX", out=str(tmp_path), provider=provider)
@@ -254,3 +255,33 @@ def test_load_pending_comments_skips_seen_and_bad(tmp_path):
         f.write("broken\n")
     pending = load_pending_comments(str(p), {2, 4})
     assert [c["rpid"] for c in pending] == [1, 3, 5]
+
+
+# ---------- 维度配置一致性（v0.2：三处必须一致） ----------
+
+def test_label_keys_match_questions_json():
+    """LABEL_KEYS 与 questions.json 的 key 集合及顺序必须完全一致。"""
+    import os
+    qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
+    with open(qs_path, encoding="utf-8") as f:
+        questions = json.load(f)
+    assert list(questions.keys()) == list(LABEL_KEYS)
+    assert len(LABEL_KEYS) == 10
+    assert "discussion" in LABEL_KEYS
+    for key, spec in questions.items():
+        assert spec["type"] == "noul"
+        assert spec["instructions"].strip()
+
+
+def test_discussion_criteria_encodes_boundaries():
+    """discussion 必须带 true/false criteria，且编码 PRD §6.1 v0.2 的两条边界。"""
+    import os
+    qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
+    with open(qs_path, encoding="utf-8") as f:
+        spec = json.load(f)["discussion"]
+    crit = spec["criteria"]
+    assert set(crit.keys()) == {"true", "false"}
+    # 边界 1：就内容提问只算 question → question 落 false 一侧
+    assert "question" in crit["false"]
+    # 边界 2：「而不是仅在表态」——保住「仅」字
+    assert "仅" in spec["instructions"] or "仅" in crit["true"] + crit["false"]
