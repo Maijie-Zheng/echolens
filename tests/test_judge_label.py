@@ -19,6 +19,7 @@ import time
 import pytest
 
 from echolens.judge import label as label_mod
+from echolens.judge.jev import JevError
 from echolens.judge.label import (
     LABEL_KEYS,
     MAX_CONCURRENCY,
@@ -150,15 +151,33 @@ def test_labels_on_disk_format(tmp_path):
     assert len(rpids) == 20
 
 
-def test_missing_answer_dim_defaults_zero(tmp_path):
-    """provider 缺维度时按 0.0 填，保证 10 维齐全。"""
+def test_missing_answer_dim_raises(tmp_path):
+    """provider 少返回一个维度 → 抛 JevError（不静默填 0），消息点名缺失键与 rpid。"""
     _write_comments(tmp_path / "comments" / "BVX.jsonl", _comments(1))
-    provider = FakeProvider(answers={"praise": 0.9})  # 只给一个维度
-    run_label("BVX", out=str(tmp_path), provider=provider)
+    partial = {k: 0.9 for k in LABEL_KEYS if k != "discussion"}  # 只少 discussion
+    provider = FakeProvider(answers=partial)
+    with pytest.raises(JevError) as ei:
+        run_label("BVX", out=str(tmp_path), provider=provider)
+    msg = str(ei.value)
+    assert "discussion" in msg   # 点名缺失维度
+    assert "rpid" in msg         # 点名 rpid
+    # 缺维度时不落盘半成品标签（_ResultWriter 可能已建空文件）
+    labels_file = tmp_path / "labels" / "BVX.jsonl"
+    assert not labels_file.exists() or _read_labels(labels_file) == []
+
+
+def test_extra_answer_dim_warns_not_raises(tmp_path, caplog):
+    """provider 多返回未知维度 → 不抛错、产生 WARNING，且落盘仍只含 10 维。"""
+    _write_comments(tmp_path / "comments" / "BVX.jsonl", _comments(1))
+    answers = {k: 0.5 for k in LABEL_KEYS}
+    answers["bogus_dim"] = 0.5  # 服务端新增的未知字段
+    provider = FakeProvider(answers=answers)
+    with caplog.at_level(logging.WARNING, logger="echolens.judge.label"):
+        stats = run_label("BVX", out=str(tmp_path), provider=provider)
+    assert stats["api_calls"] == 1  # 不中断整轮
+    assert "bogus_dim" in caplog.text  # WARNING 列出多出的键
     rec = _read_labels(tmp_path / "labels" / "BVX.jsonl")[0]
-    assert rec["labels"]["praise"] == pytest.approx(0.9)
-    assert set(rec["labels"].keys()) == set(LABEL_KEYS)
-    assert all(v == 0.0 for k, v in rec["labels"].items() if k != "praise")
+    assert set(rec["labels"].keys()) == set(LABEL_KEYS)  # 多出的键被忽略
 
 
 def test_stats_tokens_and_cost(tmp_path):
@@ -275,24 +294,27 @@ def test_label_keys_match_questions_json():
 
 
 def test_discussion_criteria_encodes_boundaries():
-    """discussion 必须带 true/false criteria，且编码 PRD §6.1 v0.2 的两条边界。"""
+    """discussion 必须带 true/false criteria，且两条边界各有一条**判别性**断言。
+
+    判别性 = 「把该边界描述从 criteria 里删掉 → 该断言必然失败」。
+    注意：criteria.true 的**基础句**本身就含「讨论」「内容」，用这些词做断言近乎
+    恒真、抓不到回归；真正只在边界半句里出现的词才可用作断言（见变异 A/B 实验）。
+    """
     import os
     qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
     with open(qs_path, encoding="utf-8") as f:
         spec = json.load(f)["discussion"]
     crit = spec["criteria"]
     assert set(crit.keys()) == {"true", "false"}
-    # 边界 1：就内容提问只算 question → question 落 false 一侧
-    assert "question" in crit["false"]
-    # 边界 2：「批评 + 讨论双标」——true 侧须同时编码
-    #   (a) 批评/褒贬类词（讨论中夹带态度也算讨论）
-    #   (b) 讨论/内容类词
-    # 删掉 crit["true"] 里「即使同时带有褒贬态度…既批评也在讨论内容」这句边界描述后，
-    # (a) 会失配从而测试失败；因此本断言不是恒真。
+    # 边界 1（false 侧）：就内容提问只算 question。基础句（表态/玩梗/闲聊）不含
+    # "question"，只有「提问只算 question」那半句含之 → 删该半句则断言失败（变异 B）。
+    assert "question" in crit["false"], \
+        f"criteria.false 未编码「提问只算 question」边界：{crit['false']!r}"
+    # 边界 2（true 侧）：批评 + 讨论「双标」。基础句（讨论/解读内容）不含
+    # 「批评/褒贬/吐槽」，只有「即使同时带有褒贬态度…既批评也在讨论内容」那半句含之
+    # → 删该半句则断言失败（变异 A）。
     assert any(w in crit["true"] for w in ("批评", "褒贬", "吐槽")), \
-        f"criteria.true 未编码「批评/褒贬」边界：{crit['true']!r}"
-    assert any(w in crit["true"] for w in ("讨论", "内容", "解读")), \
-        f"criteria.true 未编码「讨论/内容」边界：{crit['true']!r}"
+        f"criteria.true 未编码「批评/褒贬 + 讨论双标」边界：{crit['true']!r}"
 
 
 def test_load_questions_rejects_missing_key(tmp_path):
@@ -321,6 +343,43 @@ def test_load_questions_rejects_extra_key(tmp_path):
         label_mod.load_questions(str(p))
 
 
+def test_load_questions_rejects_bad_type(tmp_path):
+    """条目 type 非 'noul' → ValueError，中文点名维度与字段（不等远端 422）。"""
+    import os
+    qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
+    with open(qs_path, encoding="utf-8") as f:
+        base = json.load(f)
+    base["discussion"]["type"] = "choice"  # 非法 type
+    p = tmp_path / "questions_bad_type.json"
+    p.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError) as ei:
+        label_mod.load_questions(str(p))
+    assert "discussion" in str(ei.value)  # 点名维度
+    assert "type" in str(ei.value)        # 点名字段
+
+
+@pytest.mark.parametrize("key,instructions", [
+    ("meme", None),      # instructions 缺失
+    ("venting", "   "),  # instructions 为空白字符串
+])
+def test_load_questions_rejects_bad_instructions(tmp_path, key, instructions):
+    """instructions 缺失或为空 → ValueError，中文点名维度与字段。"""
+    import os
+    qs_path = os.path.join(os.path.dirname(label_mod.__file__), "questions.json")
+    with open(qs_path, encoding="utf-8") as f:
+        base = json.load(f)
+    if instructions is None:
+        del base[key]["instructions"]
+    else:
+        base[key]["instructions"] = instructions
+    p = tmp_path / f"questions_bad_instr_{key}.json"
+    p.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError) as ei:
+        label_mod.load_questions(str(p))
+    assert key in str(ei.value)           # 点名维度
+    assert "instructions" in str(ei.value)  # 点名字段
+
+
 def test_load_labeled_rpids_warns_on_missing_dim(tmp_path, caplog):
     """旧标注缺当前维度时打 WARNING，但续跑语义不变（仍按 rpid 跳过）。"""
     p = tmp_path / "labels" / "BVX.jsonl"
@@ -335,6 +394,21 @@ def test_load_labeled_rpids_warns_on_missing_dim(tmp_path, caplog):
     assert "discussion" in caplog.text          # 点名缺失维度
     assert "2" in caplog.text                   # 报出条数
     assert "fresh" in caplog.text               # 给出 --fresh 建议
+
+
+def test_load_labeled_rpids_warns_on_missing_labels_field(tmp_path, caplog):
+    """记录没有 labels 字段 / labels 非 dict 也算需重跑，纳入同一 WARNING。"""
+    p = tmp_path / "labels" / "BVX.jsonl"
+    _write_comments(p, [
+        {"rpid": 1, "model": "m"},                    # 根本没有 labels 字段
+        {"rpid": 2, "model": "m", "labels": "oops"},  # labels 不是 dict
+    ])
+    with caplog.at_level(logging.WARNING, logger="echolens.judge.label"):
+        seen = load_labeled_rpids(str(p))
+    assert seen == {1, 2}              # 续跑语义不变（仍按 rpid 跳过）
+    assert "labels" in caplog.text     # 提示缺 labels 字段
+    assert "2" in caplog.text          # 两条都算入计数
+    assert "fresh" in caplog.text      # 给出 --fresh 建议
 
 
 def test_load_labeled_rpids_no_warning_when_complete(tmp_path, caplog):

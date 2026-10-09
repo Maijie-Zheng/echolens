@@ -34,14 +34,17 @@ praise 夸、 criticism 批、 suggestion 建议、 question 提问、 meme 玩�
 
 ## 构建命令
 
+> 下列命令统一用仓库内 venv 解释器 `./.venv/Scripts/python.exe`（裸 `python` 是本机系统
+> Python，没装 `requests`，会 `ModuleNotFoundError`）。在仓库根目录直接照抄执行。
+
 ```bash
 # 1) 先抽样（生成 data/labeling/sample.jsonl）
-python scripts/make_label_sample.py
+./.venv/Scripts/python.exe scripts/make_label_sample.py
 
 # 2) 构建标注界面（生成 data/labeling/label.html，本地文件，不入库）
-python tools/build_label.py
+./.venv/Scripts/python.exe tools/build_label.py
 # 可选：
-#   python tools/build_label.py --sample data/labeling/sample.jsonl --out data/labeling/label.html
+#   ./.venv/Scripts/python.exe tools/build_label.py --sample data/labeling/sample.jsonl --out data/labeling/label.html
 ```
 
 构建脚本以 `echolens.judge.label.LABEL_KEYS` 为维度顺序唯一来源，并强校验

@@ -27,7 +27,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from .jev import MODEL, JevProvider
+from .jev import MODEL, JevError, JevProvider
 from .provider import JudgeProvider
 from .sanitize import sanitize_comment
 
@@ -81,20 +81,42 @@ def load_questions(path: str = QUESTIONS_PATH) -> Dict[str, Any]:
             + "；".join(problems)
             + "），请同步 echolens/judge/label.py 的 LABEL_KEYS 与 questions.json"
         )
+    # 条目级 schema 校验：键集合对了不代表内容可用——type 写错 / instructions
+    # 缺失或为空，本地不报错，要等远端返 422 才暴露（且报文对用户不友好），
+    # 故在本地提前拦下，中文指明是哪个维度的哪个字段。
+    for key, spec in questions.items():
+        if not isinstance(spec, dict):
+            raise ValueError(
+                f"questions.json 维度 {key!r} 的配置必须是对象，实际为 "
+                f"{type(spec).__name__}"
+            )
+        if spec.get("type") != "noul":
+            raise ValueError(
+                f"questions.json 维度 {key!r} 的 type 必须为 'noul'，实际为 "
+                f"{spec.get('type')!r}"
+            )
+        instructions = spec.get("instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise ValueError(
+                f"questions.json 维度 {key!r} 的 instructions 缺失或为空字符串，"
+                f"实际为 {instructions!r}"
+            )
     return questions
 
 
 def load_labeled_rpids(labels_path: str) -> Set[int]:
     """读已有 labels，返回已打标 rpid 集合（断点续跑去重）。
 
-    若发现已落盘记录缺少当前 LABEL_KEYS 中的维度（例如用 v0.1 的 9 键旧结果
-    续跑 v0.2），打一条 WARNING 提示，但不改变续跑语义（仍按 rpid 跳过）。
+    若发现已落盘记录无法提供当前 LABEL_KEYS 的完整维度（例如用 v0.1 的 9 键旧结果
+    续跑 v0.2，或旧记录根本没有 labels 字段），打一条 WARNING 提示哪些记录需重跑，
+    但不改变续跑语义（仍按 rpid 跳过）。
     """
     seen: Set[int] = set()
     if not os.path.exists(labels_path):
         return seen
     missing_keys: Set[str] = set()
-    stale_records = 0
+    stale_no_labels = 0     # 记录没有 labels 字段，或 labels 不是 dict
+    stale_missing_dims = 0  # 记录是 dict 但缺当前 LABEL_KEYS 中的维度
     with open(labels_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -108,16 +130,26 @@ def load_labeled_rpids(labels_path: str) -> Set[int]:
             if isinstance(rpid, int):
                 seen.add(rpid)
                 labels = obj.get("labels")
-                if isinstance(labels, dict):
+                if not isinstance(labels, dict):
+                    # 连 labels 字段都没有（或类型不对）同样是需重跑的旧标注，
+                    # 不能被静默略过。
+                    stale_no_labels += 1
+                else:
                     lacking = set(LABEL_KEYS) - set(labels)
                     if lacking:
-                        stale_records += 1
+                        stale_missing_dims += 1
                         missing_keys |= lacking
-    if missing_keys:
-        logger.warning(
-            "检测到 %d 条旧标注缺少维度 [%s]，建议加 --fresh 重跑",
-            stale_records, ", ".join(sorted(missing_keys)),
-        )
+    if stale_no_labels or stale_missing_dims:
+        parts = []
+        if stale_no_labels:
+            parts.append(f"缺 labels 字段 {stale_no_labels} 条")
+        if stale_missing_dims:
+            parts.append(
+                f"缺维度 {stale_missing_dims} 条（缺 ["
+                + ", ".join(sorted(missing_keys))
+                + "]）"
+            )
+        logger.warning("检测到旧标注需重跑：%s，建议加 --fresh 重跑", "；".join(parts))
     return seen
 
 
@@ -191,9 +223,27 @@ def _judge_one(
     state = sanitize_comment(str(comment.get("message") or ""))
     limiter.acquire()
     result = provider.judge(state, questions)
-    labels = {k: float(result["answers"].get(k, 0.0)) for k in LABEL_KEYS}
+    answers = result["answers"]
+    rpid = comment["rpid"]
+    # 响应侧校验（与 load_questions 的请求侧强校验对称）：任一维度缺失若静默填
+    # 0.0，一致率 / 占比会全错且无异常无日志，与已堵掉的 questions.json 静默错误
+    # 同类。故显式抛错中止本条打标（沿判断层 JevError 异常家族；已落盘结果保留，
+    # 可断点续跑）。
+    missing = [k for k in LABEL_KEYS if k not in answers]
+    if missing:
+        raise JevError(
+            f"Jev 响应缺少维度 {missing}（rpid={rpid}），实际返回 "
+            f"{sorted(answers)}；拒绝静默填 0，已中止本条打标"
+        )
+    # 多出未知维度只告警不抛错：避免服务端新增字段就把整轮打标打断。
+    extra = [k for k in answers if k not in LABEL_KEYS]
+    if extra:
+        logger.warning(
+            "rpid=%s 的 Jev 响应含未知维度 %s，已忽略", rpid, sorted(extra)
+        )
+    labels = {k: float(answers[k]) for k in LABEL_KEYS}
     return {
-        "record": {"rpid": comment["rpid"], "model": result["model"], "labels": labels},
+        "record": {"rpid": rpid, "model": result["model"], "labels": labels},
         "usage": result["usage"],
     }
 
