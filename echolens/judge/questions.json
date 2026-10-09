@@ -1,0 +1,38 @@
+{
+  "praise": {
+    "type": "noul",
+    "instructions": "这条评论是否对视频内容表达了明确的正面评价？"
+  },
+  "criticism": {
+    "type": "noul",
+    "instructions": "这条评论是否对视频内容提出了明确的批评或不满？"
+  },
+  "suggestion": {
+    "type": "noul",
+    "instructions": "这条评论是否包含具体的、可执行的改进建议？"
+  },
+  "question": {
+    "type": "noul",
+    "instructions": "这条评论是否在提出一个真诚的问题？"
+  },
+  "meme": {
+    "type": "noul",
+    "instructions": "这条评论是否主要是玩梗、跟风、刷流行语？"
+  },
+  "venting": {
+    "type": "noul",
+    "instructions": "这条评论是否主要是情绪宣泄，不含对视频的具体反馈？"
+  },
+  "spam": {
+    "type": "noul",
+    "instructions": "这条评论是否是广告、引流，或疑似复制粘贴的水军内容？"
+  },
+  "off_topic": {
+    "type": "noul",
+    "instructions": "这条评论是否与视频内容无关（引战、跑题）？"
+  },
+  "about_creator": {
+    "type": "noul",
+    "instructions": "这条评论是否针对的是创作者本人而非这期内容？"
+  }
+}
