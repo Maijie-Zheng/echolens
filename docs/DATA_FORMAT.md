@@ -116,3 +116,36 @@ data/comments/<bvid>.state.json 断点续抓状态（完成后删除）
 - `x/web-interface/view`
 - `x/v2/reply/main`
 - `x/v2/reply/reply`
+
+---
+
+# 判断层落盘格式（M1-T1）
+
+以下定义判断层（`echolens/judge/`）的输出文件格式。
+
+## 8. 打标结果文件 `data/labels/<bvid>.jsonl`
+
+每行一条打标结果（UTF-8，不带 BOM，append-only），字段严格限定为 3 个：
+
+| 字段     | 类型   | 含义                                                       |
+| -------- | ------ | ---------------------------------------------------------- |
+| `rpid`   | int    | 评论 ID，与 `data/comments/<bvid>.jsonl` 一一对应          |
+| `model`  | str    | 打标模型版本，锁 `jev-1.13.0`（PRD 决策 D3）               |
+| `labels` | object | 9 个分类维度的 Noul 概率（「是」的概率，值域 [0,1]）       |
+
+`labels` 固定包含 9 个 key（与 `echolens/judge/questions.json` 一一对应，见 PRD §6.1）：
+`praise` / `criticism` / `suggestion` / `question` / `meme` / `venting` / `spam` / `off_topic` / `about_creator`。
+
+示例：
+
+```json
+{"rpid": 318263056080, "model": "jev-1.13.0", "labels": {"praise": 0.02, "criticism": 0.91, "suggestion": 0.35, "question": 0.78, "meme": 0.04, "venting": 0.11, "spam": 0.0, "off_topic": 0.06, "about_creator": 0.03}}
+```
+
+### 打标语义与断点续跑
+
+- **每条评论恰好一次 Jev 调用**，一次调用携带全部 9 个 Noul 问题并行求值（PRD §6.2 D2）。
+- 评论正文先经 `sanitize.py` 清洗（控制字符清理 + 1000 字符截断，D4 防注入），仅作为被评判的 `state` 传入，不作为指令。
+- 结果逐条追加落盘；重跑时读已有 labels 的 `rpid` 集合去重，**已打标评论不重复调用**（D6 结果缓存）。
+- `--fresh` 删除该视频的 labels 文件后从头打标。
+- 行序不保证与 comments 文件一致（并发写入）；消费方按 `rpid` join。
